@@ -169,4 +169,7 @@ pipeline/old/
 
 /tmp/
 
+
+rec_loss
+vq_loss
 *.pdf
