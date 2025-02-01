@@ -161,8 +161,6 @@ def log_codebook_usage(dataset, loader, model, epoch, save_path, batch_size):
   device = get_device(model)
 
   codes = []
-  n_accumulate = 8 // batch_size  # Following VIT VQ-GAN.
-  accumulate_count = 0
   usage_stats = []
   for i, x in enumerate(loader):
     with torch.no_grad():
@@ -172,13 +170,10 @@ def log_codebook_usage(dataset, loader, model, epoch, save_path, batch_size):
         x = x.to(device)
         codes.append(model.get_codes(x))
 
-    accumulate_count += 1
-    if accumulate_count == n_accumulate:
-      codes = torch.concatenate(codes, dim=0)
-      usage = torch.unique(codes).shape[0] / model.num_codes
-      usage_stats.append(usage)
-      accumulate_count = 0
-      codes = []
+    codes = torch.concatenate(codes, dim=0)
+    usage = torch.unique(codes).shape[0] / model.num_codes
+    usage_stats.append(usage)
+    codes = []
   avg_usage = sum(usage_stats) / len(usage_stats)
   print("Average codebook usage: {:.3f}".format(avg_usage))
 

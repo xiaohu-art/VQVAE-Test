@@ -1,16 +1,23 @@
 # Restructuring Vector Quantization with the Rotation Trick
 
-1. **October 9, 2024:** Initial release.
-
-This repository contains the official code for Restructuring Vector Quantization with the Rotation Trick.
-
-![logo](assets/rot_trick_logo.jpg)
-
 **Restructuring Vector Quantization with the Rotation Trick**  
 Christopher Fifty, Ronald G. Junkins, Dennis Duan, Aniketh Iger, Jerry W. Liu, \
 Ehsan Amid, Sebastian Thrun, Christopher Ré\
 Under Review\
 [arXiv](https://arxiv.org/abs/xxxx.yyyyy)
+
+## Note
+Copying origin repo from [link](https://github.com/cfifty/rotation_trick). Thanks for this interesting work!
+
+
+The intention of this repo is to modify the original code to make it work on local machine and to **help us to better understand VQ-VAE architecture and the rotation trick**.
+
+Basically, I modified the code as follows:
+1. Pre-download imagenet10 dataset instead of the whole imagenet dataset.
+2. Modify the multi-node code to make it work on local machine.
+3. Simplify encoder and decoder for clear computation graph.
+4. Modify some notation to align with the original paper.
+
 
 ## Approach
 
@@ -44,7 +51,7 @@ Outer_Directory
 │   │   src/
 │   │   ...
 │
-│───imagenet/
+│───imagenet10/
 │   │   train/
 │   │   │   n03000134/
 │   │   |   ...
@@ -56,8 +63,3 @@ Outer_Directory
 ## Training a Model
 
 Follow the commands in ```src/scripts.sh```.
-
-## Evaluating a Model
-
-See ```src/reconstruction_fid.py``` as well as ```src/reconstruction_is.py``` to generate r-FID and r-IS scores
-respectively from a pretrained model.

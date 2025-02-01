@@ -29,9 +29,13 @@ class VQVAE(nn.Module):
     self.decoder = Decoder(ch=8, out_channels=channels, z_channels=z_channels, double_z=False)
 
     # Note: ema_update=True and learnable_codebook=False, so will use ema updates to learn codebook vectors.
-    self.vq = VectorQuantize(dim=embed_dim, codebook_size=n_embed, commitment_weight=args.commit_weight, decay=decay,
-                            accept_image_fmap=True, use_cosine_sim=(args.codebook == 'cosine'),
-                            threshold_ema_dead_code=0)
+    self.vq = VectorQuantize(dim=embed_dim, 
+                             codebook_size=n_embed,
+                             commitment_weight=args.commit_weight, 
+                             decay=decay,
+                             accept_image_fmap=True, 
+                             use_cosine_sim=(args.codebook == 'cosine'),
+                             threshold_ema_dead_code=0)
 
     # Set up projections into and out of codebook.
     if args.codebook == 'cosine':
@@ -87,10 +91,10 @@ class VQVAE(nn.Module):
     return x
 
   @staticmethod
-  def get_very_efficient_rotation(u, q, e):
-    w = ((u + q) / torch.norm(u + q, dim=1, keepdim=True)).detach()
-    e = e - 2 * torch.bmm(torch.bmm(e, w.unsqueeze(-1)), w.unsqueeze(1)) + 2 * torch.bmm(
-      torch.bmm(e, u.unsqueeze(-1).detach()), q.unsqueeze(1).detach())
+  def get_very_efficient_rotation(e_hat, q_hat, e):
+    r = ((e_hat + q_hat) / torch.norm(e_hat + q_hat, dim=1, keepdim=True)).detach()
+    e = e - 2 * torch.bmm(torch.bmm(e, r.unsqueeze(-1)), r.unsqueeze(1)) + 2 * torch.bmm(
+      torch.bmm(e, e_hat.unsqueeze(-1).detach()), q_hat.unsqueeze(1).detach())
     return e
 
   def forward(self, x, rot=False):
