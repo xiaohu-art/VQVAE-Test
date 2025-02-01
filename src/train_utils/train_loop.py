@@ -4,6 +4,8 @@ import torch
 
 from pyprojroot import here as project_root
 
+import torchviz
+
 sys.path.insert(0, str(project_root()))
 
 from src.train_utils.utils import get_device
@@ -23,8 +25,10 @@ def train_loop(args, loader, model, world_size, optimizer, scaler, scheduler, lo
       if len(x) == 2: x = x[0]
 
       x = x.to(device)
-      rec_loss, vq_loss = model(x, vhp='vhp' in args.model, double_fp='dfp' in args.model, rot='rot' in args.model,
-                                loss_scale=scaler.get_scale())
+      rec_loss, vq_loss = model(x, rot='rot' in args.model)
+      if i == 0:
+        torchviz.make_dot(rec_loss).render('rec_loss')
+        torchviz.make_dot(vq_loss).render('vq_loss')
 
       rec_loss = torch.mean(rec_loss)
       vq_loss = torch.mean(vq_loss)

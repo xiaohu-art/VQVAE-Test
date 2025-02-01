@@ -166,3 +166,7 @@ live/price_data/
 
 # Old files no longer relevant
 pipeline/old/
+
+/tmp/
+
+*.pdf

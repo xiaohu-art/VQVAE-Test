@@ -372,13 +372,9 @@ class EuclideanCodebook(Module):
     self.register_buffer('codebook_variance', torch.empty(num_codebooks, 1, dim))
 
   @torch.jit.ignore
-  def init_embed_(self, data, mask=None):
+  def init_embed_(self, data):
     if self.initted:
       return
-
-    if exists(mask):
-      c = data.shape[0]
-      data = rearrange(data[mask], '(c n) d -> c n d', c=c)
 
     embed, cluster_size = kmeans(
       data,
@@ -413,7 +409,7 @@ class EuclideanCodebook(Module):
     self.register_buffer(buffer_name, value)
 
   @torch.jit.ignore
-  def update_affine(self, data, embed, mask=None):
+  def update_affine(self, data, embed):
     assert self.affine_param
 
     var_fn = partial(torch.var, unbiased=False)
@@ -430,10 +426,6 @@ class EuclideanCodebook(Module):
     # prepare batch data, which depends on whether it has masking
 
     data = rearrange(data, 'h ... d -> h (...) d')
-
-    if exists(mask):
-      c = data.shape[0]
-      data = rearrange(data[mask], '(c n) d -> c n d', c=c)
 
     # calculate batch mean and variance
 
@@ -489,13 +481,10 @@ class EuclideanCodebook(Module):
   @autocast(enabled=False)
   def forward(
           self,
-          x,
-          sample_codebook_temp=None,
-          mask=None,
-          freeze_codebook=False
+          x
   ):
     needs_codebook_dim = x.ndim < 4
-    sample_codebook_temp = default(sample_codebook_temp, self.sample_codebook_temp)
+    sample_codebook_temp = self.sample_codebook_temp
 
     x = x.float()
 
@@ -505,14 +494,10 @@ class EuclideanCodebook(Module):
     dtype = x.dtype
     flatten, ps = pack_one(x, 'h * d')
 
-    if exists(mask):
-      mask = repeat(mask, 'b n -> c (b h n)', c=flatten.shape[0],
-                    h=flatten.shape[-2] // (mask.shape[0] * mask.shape[1]))
-
-    self.init_embed_(flatten, mask=mask)
+    self.init_embed_(flatten)
 
     if self.affine_param:
-      self.update_affine(flatten, self.embed, mask=mask)
+      self.update_affine(flatten, self.embed)
 
     embed = self.embed if self.learnable_codebook else self.embed.detach()
 
@@ -533,13 +518,10 @@ class EuclideanCodebook(Module):
     else:
       quantize = batched_embedding(embed_ind, embed)
 
-    if self.training and self.ema_update and not freeze_codebook:
+    if self.training and self.ema_update:
 
       if self.affine_param:
         flatten = (flatten - self.batch_mean) * (codebook_std / batch_std) + self.codebook_mean
-
-      if exists(mask):
-        embed_onehot[~mask] = 0.
 
       cluster_size = embed_onehot.sum(dim=1)
 
@@ -627,13 +609,9 @@ class CosineSimCodebook(Module):
       self.register_buffer('embed', embed)
 
   @torch.jit.ignore
-  def init_embed_(self, data, mask=None):
+  def init_embed_(self, data):
     if self.initted:
       return
-
-    if exists(mask):
-      c = data.shape[0]
-      data = rearrange(data[mask], '(c n) d -> c n d', c=c)
 
     embed, cluster_size = kmeans(
       data,
@@ -677,13 +655,10 @@ class CosineSimCodebook(Module):
   @autocast(enabled=False)
   def forward(
           self,
-          x,
-          sample_codebook_temp=None,
-          mask=None,
-          freeze_codebook=False
+          x
   ):
     needs_codebook_dim = x.ndim < 4
-    sample_codebook_temp = default(sample_codebook_temp, self.sample_codebook_temp)
+    sample_codebook_temp = self.sample_codebook_temp
 
     x = x.float()
 
@@ -694,11 +669,7 @@ class CosineSimCodebook(Module):
 
     flatten, ps = pack_one(x, 'h * d')
 
-    if exists(mask):
-      mask = repeat(mask, 'b n -> c (b h n)', c=flatten.shape[0],
-                    h=flatten.shape[-2] // (mask.shape[0] * mask.shape[1]))
-
-    self.init_embed_(flatten, mask=mask)
+    self.init_embed_(flatten)
 
     embed = self.embed if self.learnable_codebook else self.embed.detach()
 
@@ -713,9 +684,7 @@ class CosineSimCodebook(Module):
     else:
       quantize = batched_embedding(embed_ind, embed)
 
-    if self.training and self.ema_update and not freeze_codebook:
-      if exists(mask):
-        embed_onehot[~mask] = 0.
+    if self.training and self.ema_update:
 
       bins = embed_onehot.sum(dim=1)
       self.all_reduce_fn(bins)
@@ -764,7 +733,6 @@ class VectorQuantize(Module):
           separate_codebook_per_head=False,
           decay=0.8,
           eps=1e-5,
-          freeze_codebook=False,
           kmeans_init=False,
           kmeans_iters=10,
           sync_kmeans=True,
@@ -938,22 +906,16 @@ class VectorQuantize(Module):
   def forward(
           self,
           x,
-          indices=None,
-          mask=None,
-          sample_codebook_temp=None,
-          freeze_codebook=False,
           return_loss_breakdown=False,
   ):
     orig_input = x
 
-    only_one = x.ndim == 2
+    only_one = x.ndim == 2    # False for imagenet
 
     if only_one:
-      assert not exists(mask)
       x = rearrange(x, 'b d -> b 1 d')
 
-    shape, device, heads, is_multiheaded, codebook_size, return_loss = x.shape, x.device, self.heads, self.heads > 1, self.codebook_size, exists(
-      indices)
+    shape, device, heads, is_multiheaded, codebook_size = x.shape, x.device, self.heads, self.heads > 1, self.codebook_size
 
     need_transpose = not self.channel_last and not self.accept_image_fmap
     should_inplace_optimize = exists(self.in_place_codebook_optimizer)
@@ -981,17 +943,9 @@ class VectorQuantize(Module):
 
     x = self._codebook.transform_input(x)
 
-    # codebook forward kwargs
-
-    codebook_forward_kwargs = dict(
-      sample_codebook_temp=sample_codebook_temp,
-      mask=mask,
-      freeze_codebook=freeze_codebook
-    )
-
     # quantize
 
-    quantize, embed_ind, distances = self._codebook(x, **codebook_forward_kwargs)
+    quantize, embed_ind, distances = self._codebook(x)
 
     # losses for loss breakdown
 
@@ -999,19 +953,9 @@ class VectorQuantize(Module):
 
     # one step in-place update
 
-    if should_inplace_optimize and self.training and not freeze_codebook:
+    if should_inplace_optimize and self.training:
 
-      if exists(mask):
-        loss = F.mse_loss(quantize, x.detach(), reduction='none')
-
-        loss_mask = mask
-        if is_multiheaded:
-          loss_mask = repeat(mask, 'b n -> c (b h) n', c=loss.shape[0], h=loss.shape[1] // mask.shape[0])
-
-        loss = loss[loss_mask].mean()
-
-      else:
-        loss = F.mse_loss(quantize, x.detach())
+      loss = F.mse_loss(quantize, x.detach())
 
       loss.backward()
       self.in_place_codebook_optimizer.step()
@@ -1021,11 +965,11 @@ class VectorQuantize(Module):
 
       # quantize again
 
-      quantize, embed_ind, distances = self._codebook(x, **codebook_forward_kwargs)
+      quantize, embed_ind, distances = self._codebook(x)
 
     if self.training:
       # determine code to use for commitment loss
-      maybe_detach = torch.detach if not self.learnable_codebook or freeze_codebook else identity
+      maybe_detach = torch.detach if not self.learnable_codebook else identity
 
       commit_quantize = maybe_detach(quantize)
 
@@ -1055,11 +999,6 @@ class VectorQuantize(Module):
       )
 
       return ce_loss
-
-    # if returning cross entropy loss on codes that were passed in
-
-    if return_loss:
-      return quantize, calculate_ce_loss(indices)
 
     # transform embedding indices
 
@@ -1093,27 +1032,9 @@ class VectorQuantize(Module):
 
       if self.has_commitment_loss:
         if self.commitment_use_cross_entropy_loss:
-          if exists(mask):
-            ce_loss_mask = mask
-            if is_multiheaded:
-              ce_loss_mask = repeat(ce_loss_mask, 'b n -> b n h', h=heads)
-
-            embed_ind.masked_fill_(~ce_loss_mask, -1)
-
           commit_loss = calculate_ce_loss(embed_ind)
         else:
-          if exists(mask):
-            # with variable lengthed sequences
-            commit_loss = F.mse_loss(commit_quantize, x, reduction='none')
-
-            loss_mask = mask
-            if is_multiheaded:
-              loss_mask = repeat(loss_mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
-                                 h=commit_loss.shape[1] // mask.shape[0])
-
-            commit_loss = commit_loss[loss_mask].mean()
-          else:
-            commit_loss = F.mse_loss(commit_quantize, x)
+          commit_loss = F.mse_loss(commit_quantize, x)
 
         loss = loss + commit_loss * self.commitment_weight
 
@@ -1159,15 +1080,6 @@ class VectorQuantize(Module):
 
     if only_one:
       quantize = rearrange(quantize, 'b 1 d -> b d')
-
-    # if masking, only return quantized for where mask has True
-
-    if exists(mask):
-      quantize = torch.where(
-        rearrange(mask, '... -> ... 1'),
-        quantize,
-        orig_input
-      )
 
     if not return_loss_breakdown:
       return quantize, embed_ind, loss

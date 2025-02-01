@@ -2,7 +2,6 @@ import argparse
 import logging
 import sys
 import torch
-import wandb
 
 import numpy as np
 
@@ -18,10 +17,10 @@ from src.train_utils.schedulers import WarmupCosineFlatSchedule
 
 
 def get_device(model):
-  if isinstance(model.module, VQVAE):
-    device = model.module.encoder.conv_in.weight.device
+  if isinstance(model, VQVAE):
+    device = model.encoder.conv_in.weight.device
   else:
-    device = model.module.vq_model.module.encoder.conv_in.weight.device
+    device = model.vq_model.module.encoder.conv_in.weight.device
   return device
 
 
@@ -84,7 +83,7 @@ def train_parser():
 
   # Trainer arguments.
   parser.add_argument('--checkpoint', help='PATH for checkpoint file', type=str, default='')
-  parser.add_argument('--gpu', help='gpu device', type=int, nargs='+', default=0)
+  parser.add_argument('--gpu', help='gpu device', type=int, nargs='+', default=1)
   parser.add_argument('--save_dir', help='Where to save model files.', type=str, default='outputs')
   parser.add_argument('--skip_validation', help='Whether to validation or not.', action='store_true')
   parser.add_argument('--skip_logging', help='Whether to skip logging or not.', action='store_true')
@@ -97,7 +96,7 @@ def train_parser():
 
 def get_opt(model, args):
   # If stage 1 training.
-  if isinstance(model.module, VQVAE):
+  if isinstance(model, VQVAE):
     if args.opt == 'adam':
       optimizer = optim.AdamW(model.parameters(),
                               lr=args.lr,
@@ -147,8 +146,6 @@ def reconstruct_latents(dataset, loader, model, epoch, save_path, num_plots=6):
 
   plt.savefig(f'{save_path}/{epoch}_fig.png', dpi=300)
   plt.close()
-  if wandb.run is not None:
-    wandb.log({f'reconstructions': wandb.Image(f'{save_path}/{epoch}_fig.png')}, step=epoch)
 
   return
 
@@ -164,7 +161,7 @@ def log_codebook_usage(dataset, loader, model, epoch, save_path, batch_size):
   device = get_device(model)
 
   codes = []
-  n_accumulate = 256 // batch_size  # Following VIT VQ-GAN.
+  n_accumulate = 8 // batch_size  # Following VIT VQ-GAN.
   accumulate_count = 0
   usage_stats = []
   for i, x in enumerate(loader):
@@ -173,18 +170,17 @@ def log_codebook_usage(dataset, loader, model, epoch, save_path, batch_size):
         # Get only the raw images if training on a dataset like ImageNet that returns (image, label) tuples.
         if len(x) == 2: x = x[0]
         x = x.to(device)
-        codes.append(model.module.get_codes(x))
+        codes.append(model.get_codes(x))
 
     accumulate_count += 1
     if accumulate_count == n_accumulate:
       codes = torch.concatenate(codes, dim=0)
-      usage = torch.unique(codes).shape[0] / model.module.num_codes
+      usage = torch.unique(codes).shape[0] / model.num_codes
       usage_stats.append(usage)
       accumulate_count = 0
       codes = []
   avg_usage = sum(usage_stats) / len(usage_stats)
-  if wandb.run is not None:
-    wandb.log({f'codebook_usage': avg_usage}, step=epoch)
+  print("Average codebook usage: {:.3f}".format(avg_usage))
 
 
 def sample_images(dataset, loader, model, epoch, save_path, num_plots=6):
@@ -210,9 +206,6 @@ def sample_images(dataset, loader, model, epoch, save_path, num_plots=6):
 
   plt.savefig(f'{save_path}/{epoch}_fig.png', dpi=300)
   plt.close()
-  if wandb.run is not None:
-    wandb.log({f'samples': wandb.Image(f'{save_path}/{epoch}_fig.png')}, step=epoch)
-
   return
 
 

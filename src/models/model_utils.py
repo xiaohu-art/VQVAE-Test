@@ -3,15 +3,9 @@ def get_model_params(dataset, f):
   if dataset == 'imagenet' and f == 8:
     channels = 3
     resolution = 256
-    z_channels = 256
+    z_channels = 128
     embed_dim = 32
-    n_embed = 1024
-  elif dataset == 'imagenet' and f == 4:
-    channels = 3
-    resolution = 256
-    z_channels = 3
-    embed_dim = 3
-    n_embed = 8192
+    n_embed = 512
   else:
     raise Exception(f'{dataset} setting for args.dataset is not supported.')
   return channels, resolution, z_channels, embed_dim, n_embed

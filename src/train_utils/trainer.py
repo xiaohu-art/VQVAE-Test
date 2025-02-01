@@ -77,12 +77,11 @@ class Train_Manager:
         self.logger.info(f'val_losses: {val_loss:.3f}')
 
     # Log loss values and generated images.
-    if dist.get_rank() == 0:
-      log_trainer_metrics(rec_loss, commit_loss, val_loss, scheduler, e)
-      if not self.args.skip_logging:
-        if self.logging_fn:
-          for l in self.logging_fn:
-            l(epoch=e, save_path=self.save_path)
+    log_trainer_metrics(rec_loss, commit_loss, val_loss, scheduler, e)
+    if not self.args.skip_logging:
+      if self.logging_fn:
+        for l in self.logging_fn:
+          l(epoch=e, save_path=self.save_path)
 
     torch.save(
       {'args': self.args, 'model': model.state_dict(), 'epoch': e, 'optimizer': optimizer.state_dict(),
