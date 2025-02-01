@@ -19,6 +19,65 @@ Basically, I modified the code as follows:
 4. Modify some notation to align with the original paper.
 
 
+## Core of the **rotation trick** is in `model/vq_vae`:
+```python
+def get_very_efficient_rotation(e_hat, q_hat, e):
+    r = ((e_hat + q_hat) / torch.norm(e_hat + q_hat, dim=1, keepdim=True)).detach()
+    e = e - 2 * torch.bmm(torch.bmm(e, r.unsqueeze(-1)), r.unsqueeze(1)) + 2 * torch.bmm(
+      torch.bmm(e, e_hat.unsqueeze(-1).detach()), q_hat.unsqueeze(1).detach())
+    return e
+
+b, c, h, w = x.shape
+x = rearrange(x, 'b c h w -> (b h w) c')
+quantized = rearrange(quantized, 'b c h w -> (b h w) c')
+pre_norm_q = self.get_very_efficient_rotation(x / (torch.norm(x, dim=1, keepdim=True) + 1e-6),
+                                            quantized / (torch.norm(quantized, dim=1, keepdim=True) + 1e-6),
+                                            x.unsqueeze(1)).squeeze()
+quantized = pre_norm_q * (
+        torch.norm(quantized, dim=1, keepdim=True) / (torch.norm(x, dim=1, keepdim=True) + 1e-6)).detach()
+quantized = rearrange(quantized, '(b h w) c -> b c h w', b=b, h=h, w=w)
+```
+
+It is corresponding to:
+![method](assets/equation.png)
+in origin paper, where $\lambda, r, \hat{e}, \hat{q}$ are all stop-gradient values. 
+
+## EMA Update in VectorQuantization
+For **vector quantization** part, this repo (in my view) refers to the implementation of [vector-quantize-pytorch](https://github.com/lucidrains/vector-quantize-pytorch) and here I remove some unnecessary parts, such as orthogonal loss and diversity loss.
+
+The EMA update is implemented in `vector_quantize_pytorch.py` as follows:
+```python
+
+dist = -cdist(flatten, embed)
+
+embed_ind, embed_onehot = self.gumbel_sample(dist, dim=-1, temperature=sample_codebook_temp, training=self.training)
+
+unpacked_onehot = unpack_one(embed_onehot, ps, 'h * c')
+quantize = einsum('h b n c, h c d -> h b n d', unpacked_onehot, embed)
+
+cluster_size = embed_onehot.sum(dim=1)
+```
++ `embed_onehot` is a tensor of shape [`num_codebooks`, `batch_size`, `codebook_size`]
++ `embed_onehot.sum(dim=1)` is a tensor of shape [`num_codebooks`, `codebook_size`] tells us **how many times each codebook vector is used** in the current batch assigned to each code.
+
+```python
+ema_inplace(self.cluster_size.data, cluster_size, self.decay)
+```
++ this updates the “historical” cluster sizes, rather than overwriting them with just the current batch.
+
+```python
+embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+ema_inplace(self.embed_avg.data, embed_sum, self.decay)
+```
++ for each code `c`, we sum the vectors `d` for which the one-hot is active.
++ the result is `[h, c, d]`, i.e. a **sum** of all sample vectors assigned to each code.
+
+```python
+embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+self.embed.data.copy_(embed_normalized)
+```
++ by dividing the historical sum of vectors (self.embed_avg) by the (smoothed) cluster sizes, we can get the new average vector for each code
+
 ## Approach
 
 In the context of VQ-VAEs, the rotation trick smoothly transforms each encoder output into its corresponding codebook
@@ -53,10 +112,8 @@ Outer_Directory
 │
 │───imagenet10/
 │   │   train/
-│   │   │   n03000134/
 │   │   |   ...
 │   │   val/
-│   │   │   n03000247/
 │   │   |   ...
 ```
 

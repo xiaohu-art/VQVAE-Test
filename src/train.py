@@ -7,8 +7,14 @@ os.environ["MKL_NUM_THREADS"] = "4"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "4"
 os.environ["NUMEXPR_NUM_THREADS"] = "4"
 os.environ["TOKENIZERS_PARALLELISM"] = "true"  # If the process hangs, set this to false: https://github.com/huggingface/transformers/issues/5486.
-os.environ['TMPDIR'] = '/home/ubuntu/Desktop/VQ-VAE-Test/tmp'
-tempfile.tempdir = '/home/ubuntu/Desktop/VQ-VAE-Test/tmp'
+
+TMP_PATH = os.path.join(os.getcwd(), '..', 'tmp')
+
+os.environ['TMPDIR'] = TMP_PATH
+tempfile.tempdir = TMP_PATH
+
+if not os.path.exists(TMP_PATH):
+  os.makedirs(TMP_PATH)
 
 import sys
 import torch

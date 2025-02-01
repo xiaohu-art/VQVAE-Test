@@ -190,27 +190,6 @@ def all_gather_variably_sized(x, sizes, dim=0):
   return all_x
 
 
-def sample_vectors_distributed(local_samples, num):
-  local_samples = rearrange(local_samples, '1 ... -> ...')
-
-  rank = distributed.get_rank()
-  all_num_samples = all_gather_sizes(local_samples, dim=0)
-
-  if rank == 0:
-    samples_per_rank = sample_multinomial(num, all_num_samples / all_num_samples.sum())
-  else:
-    samples_per_rank = torch.empty_like(all_num_samples)
-
-  distributed.broadcast(samples_per_rank, src=0)
-  samples_per_rank = samples_per_rank.tolist()
-
-  local_samples = sample_vectors(local_samples, samples_per_rank[rank])
-  all_samples = all_gather_variably_sized(local_samples, samples_per_rank, dim=0)
-  out = torch.cat(all_samples, dim=0)
-
-  return rearrange(out, '... -> 1 ...')
-
-
 def batched_bincount(x, *, minlength):
   batch, dtype, device = x.shape[0], x.dtype, x.device
   target = torch.zeros(batch, minlength, dtype=dtype, device=device)
@@ -264,13 +243,6 @@ def batched_embedding(indices, embeds):
   indices = repeat(indices, 'h b n -> h b n d', d=dim)
   embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
   return embeds.gather(2, indices)
-
-
-# distributed helpers
-
-# @cache
-def is_distributed():
-  return distributed.is_initialized() and distributed.get_world_size() > 1
 
 
 # regularization losses
