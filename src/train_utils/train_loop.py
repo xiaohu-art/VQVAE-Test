@@ -26,9 +26,9 @@ def train_loop(args, loader, model, world_size, optimizer, scaler, scheduler, lo
 
       x = x.to(device)
       rec_loss, vq_loss = model(x, rot='rot' in args.model)
-      if i == 0:
-        torchviz.make_dot(rec_loss).render('rec_loss')
-        torchviz.make_dot(vq_loss).render('vq_loss')
+      # if i == 0:
+      #   torchviz.make_dot(rec_loss).render('rec_loss')
+      #   torchviz.make_dot(vq_loss).render('vq_loss')
 
       rec_loss = torch.mean(rec_loss)
       vq_loss = torch.mean(vq_loss)

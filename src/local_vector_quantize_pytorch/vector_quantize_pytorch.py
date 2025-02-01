@@ -224,8 +224,7 @@ def kmeans(
         num_clusters,
         num_iters=10,
         use_cosine_sim=False,
-        sample_fn=batched_sample_vectors,
-        all_reduce_fn=noop
+        sample_fn=batched_sample_vectors
 ):
   num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
 
@@ -239,7 +238,6 @@ def kmeans(
 
     buckets = torch.argmax(dists, dim=-1)
     bins = batched_bincount(buckets, minlength=num_clusters)
-    all_reduce_fn(bins)
 
     zero_mask = bins == 0
     bins_min_clamped = bins.masked_fill(zero_mask, 1)
@@ -248,7 +246,6 @@ def kmeans(
 
     new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
     new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
-    all_reduce_fn(new_means)
 
     if use_cosine_sim:
       new_means = l2norm(new_means)
@@ -301,7 +298,6 @@ class EuclideanCodebook(Module):
           eps=1e-5,
           threshold_ema_dead_code=2,
           reset_cluster_size=None,
-          use_ddp=False,
           learnable_codebook=False,
           gumbel_sample=gumbel_sample,
           sample_codebook_temp=1.,
@@ -331,16 +327,6 @@ class EuclideanCodebook(Module):
     assert callable(gumbel_sample)
     self.gumbel_sample = gumbel_sample
     self.sample_codebook_temp = sample_codebook_temp
-
-    assert not (
-              use_ddp and num_codebooks > 1 and kmeans_init), 'kmeans init is not compatible with multiple codebooks in distributed environment for now'
-
-    self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
-
-    self.replace_sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
-
-    self.kmeans_all_reduce_fn = distributed.all_reduce if use_ddp and sync_kmeans else noop
-    self.all_reduce_fn = distributed.all_reduce if use_ddp else noop
 
     self.register_buffer('initted', torch.Tensor([not kmeans_init]))
     self.register_buffer('cluster_size', torch.zeros(num_codebooks, codebook_size))
@@ -380,8 +366,7 @@ class EuclideanCodebook(Module):
       data,
       self.codebook_size,
       self.kmeans_iters,
-      sample_fn=self.sample_fn,
-      all_reduce_fn=self.kmeans_all_reduce_fn
+      sample_fn=batched_sample_vectors
     )
 
     embed_sum = embed * rearrange(cluster_size, '... -> ... 1')
@@ -439,12 +424,10 @@ class EuclideanCodebook(Module):
     # number of vectors, for denominator
 
     num_vectors = torch.tensor([num_vectors], device=device, dtype=dtype)
-    distributed.all_reduce(num_vectors)
 
     # calculate distributed mean
 
     batch_sum = reduce(data, 'h n d -> h 1 d', 'sum')
-    distributed.all_reduce(batch_sum)
     batch_mean = batch_sum / num_vectors
 
     self.update_with_decay('batch_mean', batch_mean, self.affine_param_batch_decay)
@@ -452,14 +435,13 @@ class EuclideanCodebook(Module):
     # calculate distributed variance
 
     variance_numer = reduce((data - batch_mean) ** 2, 'h n d -> h 1 d', 'sum')
-    distributed.all_reduce(variance_numer)
     batch_variance = variance_numer / num_vectors
 
     self.update_with_decay('batch_variance', batch_variance, self.affine_param_batch_decay)
 
   def replace(self, batch_samples, batch_mask):
     for ind, (samples, mask) in enumerate(zip(batch_samples, batch_mask)):
-      sampled = self.replace_sample_fn(rearrange(samples, '... -> 1 ...'), mask.sum().item())
+      sampled = batched_sample_vectors(rearrange(samples, '... -> 1 ...'), mask.sum().item())
       sampled = rearrange(sampled, '1 ... -> ...')
 
       self.embed.data[ind][mask] = sampled
@@ -525,12 +507,10 @@ class EuclideanCodebook(Module):
 
       cluster_size = embed_onehot.sum(dim=1)
 
-      self.all_reduce_fn(cluster_size)
       ema_inplace(self.cluster_size.data, cluster_size, self.decay)
 
       embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
       embed_sum = embed_sum.contiguous()
-      self.all_reduce_fn(embed_sum)
 
       ema_inplace(self.embed_avg.data, embed_sum, self.decay)
 
@@ -562,7 +542,6 @@ class CosineSimCodebook(Module):
           eps=1e-5,
           threshold_ema_dead_code=2,
           reset_cluster_size=None,
-          use_ddp=False,
           learnable_codebook=False,
           gumbel_sample=gumbel_sample,
           sample_codebook_temp=1.,
@@ -591,13 +570,6 @@ class CosineSimCodebook(Module):
     self.gumbel_sample = gumbel_sample
     self.sample_codebook_temp = sample_codebook_temp
 
-    self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
-
-    self.replace_sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
-
-    self.kmeans_all_reduce_fn = distributed.all_reduce if use_ddp and sync_kmeans else noop
-    self.all_reduce_fn = distributed.all_reduce if use_ddp else noop
-
     self.register_buffer('initted', torch.Tensor([not kmeans_init]))
     self.register_buffer('cluster_size', torch.zeros(num_codebooks, codebook_size))
     self.register_buffer('embed_avg', embed.clone())
@@ -618,8 +590,7 @@ class CosineSimCodebook(Module):
       self.codebook_size,
       self.kmeans_iters,
       use_cosine_sim=True,
-      sample_fn=self.sample_fn,
-      all_reduce_fn=self.kmeans_all_reduce_fn
+      sample_fn=batched_sample_vectors
     )
 
     embed_sum = embed * rearrange(cluster_size, '... -> ... 1')
@@ -633,7 +604,7 @@ class CosineSimCodebook(Module):
     batch_samples = l2norm(batch_samples)
 
     for ind, (samples, mask) in enumerate(zip(batch_samples, batch_mask)):
-      sampled = self.replace_sample_fn(rearrange(samples, '... -> 1 ...'), mask.sum().item())
+      sampled = batched_sample_vectors(rearrange(samples, '... -> 1 ...'), mask.sum().item())
       sampled = rearrange(sampled, '1 ... -> ...')
 
       self.embed.data[ind][mask] = sampled
@@ -687,13 +658,11 @@ class CosineSimCodebook(Module):
     if self.training and self.ema_update:
 
       bins = embed_onehot.sum(dim=1)
-      self.all_reduce_fn(bins)
 
       ema_inplace(self.cluster_size.data, bins, self.decay)
 
       embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
       embed_sum = embed_sum.contiguous()
-      self.all_reduce_fn(embed_sum)
 
       ema_inplace(self.embed_avg.data, embed_sum, self.decay)
 
@@ -714,15 +683,6 @@ class CosineSimCodebook(Module):
 
 
 # main class
-
-LossBreakdown = namedtuple('LossBreakdown', [
-  'commitment',
-  'codebook_diversity',
-  'orthogonal_reg',
-  'inplace_optimize',
-])
-
-
 class VectorQuantize(Module):
   def __init__(
           self,
@@ -836,18 +796,9 @@ class VectorQuantize(Module):
     return codes
 
   def forward(
-          self,
-          x,
-          return_loss_breakdown=False,
+          self, x
   ):
-    orig_input = x
-
-    only_one = x.ndim == 2    # False for imagenet
-
-    if only_one:
-      x = rearrange(x, 'b d -> b 1 d')
-
-    shape, device, heads = x.shape, x.device, self.heads
+    shape, device = x.shape, x.device
 
     need_transpose = not self.channel_last and not self.accept_image_fmap
 
@@ -870,7 +821,7 @@ class VectorQuantize(Module):
 
     # losses for loss breakdown
 
-    commit_loss = orthogonal_reg_loss = inplace_optimize_loss = codebook_diversity_loss = self.zero
+    commit_loss = self.zero
 
     if self.training:
       # determine code to use for commitment loss
@@ -905,9 +856,6 @@ class VectorQuantize(Module):
     if self.accept_image_fmap:
       embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
 
-    if only_one:
-      embed_ind = rearrange(embed_ind, 'b 1 ... -> b ...')
-
     # aggregate loss
 
     loss = torch.tensor([0.], device=device, requires_grad=self.training)
@@ -929,8 +877,5 @@ class VectorQuantize(Module):
 
     if self.accept_image_fmap:
       quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
-
-    if only_one:
-      quantize = rearrange(quantize, 'b 1 d -> b d')
 
     return quantize, embed_ind, loss
