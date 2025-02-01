@@ -39,7 +39,9 @@ quantized = rearrange(quantized, '(b h w) c -> b c h w', b=b, h=h, w=w)
 ```
 
 It is corresponding to:
+
 ![method](assets/equation.png)
+
 in origin paper, where $\lambda, r, \hat{e}, \hat{q}$ are all stop-gradient values. 
 
 ## EMA Update in VectorQuantization
